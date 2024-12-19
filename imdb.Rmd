@@ -1,0 +1,255 @@
+---
+title: "IMDb filmovi"
+output: html_document
+date: "2024-12-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Import paketa ako nisu instalirani.
+
+```{r}
+if (!require("tinytex", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("tinytex")
+  
+}
+if (!require("gt", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("gt")
+  
+} 
+if (!require("dplyr", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("dplyr")
+  
+} 
+
+if (!require("nortest", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("nortest")
+  
+} 
+
+if (!require("rstatix", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("rstatix")
+  
+} 
+
+if (!require("ggpubr", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("ggpubr")
+  
+} 
+
+if (!require("caret", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("caret")
+  
+} 
+if (!require("gplots", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("gplots")
+  
+} 
+if (!require("ROCR", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("ROCR")
+  
+} 
+if (!require("ggplot2", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("ggplot2")
+  
+} 
+
+if (!require("fastDummies", character.only = TRUE)) {
+  # If not installed, install the package
+  install.packages("fastDummies")
+  
+}
+
+
+library(fastDummies)
+library(gt)
+library(ROCR)
+library(gplots)
+library(dplyr)
+library(car)
+library(nortest)
+library(rstatix)
+library(ggpubr)
+library(caret)
+library(ggplot2)
+```
+
+```{r}
+data <- read.csv("movie_IMDB.csv")
+head(data)
+```
+
+# Zadatak 1.
+
+## Postoji li razlika u zaradi filmova namijenjenih za opcu publiku (PG) i filmova namijenjenih za osobe odredene dobi (R)?
+
+Zarade filmova u nasem datasetu su brojcane vrijednosti atributa gross. Izdvojit cemo PG filmove i R filmove u zasebne skupove podataka. 
+
+```{r}
+pg_movies <- subset(data, content_rating == "PG")
+r_movies <- subset(data, content_rating == "R")
+```
+
+Prvo cemo ukloniti nedostajuce vrijednosti (NA). 
+
+```{r}
+pg_movies <- na.omit(pg_movies)
+r_movies <- na.omit(r_movies)
+```
+
+Sljedeci korak je provjera normalnosti podataka i homogenosti varijance. To su pretpostavke t-testa koji cemo na kraju koristiti kako bi odgovorili na pocetno pitanje.
+Normalnost podataka provjerit cemo koristeci ????Kolmogorov-Smirnovljev test????. Prije ispitivanja pretpostavki testa jos cemo pogledati neke grafove da vidimo s kakvim podacima radimo. 
+Iz nekih grafova cemo moci potvrditi jesu li podaci normalno distribuirani, iz drugih cemo pak vidjeti kakav je medijan i ima li strsecih vrijednosti. 
+
+```{r}
+# QQ Plots
+qqnorm(pg_movies$gross, main = "Q-Q Plot of Gross Revenue for PG Movies")
+qqline(pg_movies$gross, col = "red")
+
+qqnorm(r_movies$gross, main = "Q-Q Plot of Gross Revenue for R Movies")
+qqline(r_movies$gross, col = "red")
+
+# Histograms
+hist(pg_movies$gross, main = "PG Movies Gross", xlab = "Gross", breaks = 20)
+hist(r_movies$gross, main = "R Movies Gross", xlab = "Gross", breaks = 20)
+```
+Osim vizualnog nacina, normalnost mozemo provjeriti i koristeci Kolmogorov–Smirnovljev test.
+
+```{r}
+#ks ne funkcionira za vrijednosti koje se ponavljaju? 
+ks.test(pg_movies$gross, "pnorm", mean = mean(pg_movies$gross, na.rm = TRUE), 
+        sd = sd(pg_movies$gross, na.rm = TRUE))
+
+ks.test(r_movies$gross, "pnorm", mean = mean(r_movies$gross, na.rm = TRUE), 
+        sd = sd(r_movies$gross, na.rm = TRUE))
+
+shapiro.test(pg_movies$gross)
+shapiro.test(r_movies$gross)
+```
+Shapiro-Wilk test ne potvrduje normalnost. Iz histograma je vidljivo da su distribucije nagnute desno, pa cemo probati logaritmirat podatke te ponoviti grafove
+i testove normalnosti.
+
+```{r}
+pg_movies$log_gross <- log(pg_movies$gross + 1)
+r_movies$log_gross <- log(r_movies$gross + 1)
+
+qqnorm(pg_movies$log_gross)
+qqline(pg_movies$log_gross, col = "red")
+
+qqnorm(r_movies$log_gross)
+qqline(r_movies$log_gross, col = "red")
+
+hist(pg_movies$log_gross, main = "Log Gross for PG Movies", breaks = 20)
+hist(r_movies$log_gross, main = "Log Gross for R Movies", breaks = 20)
+```
+
+```{r}
+shapiro.test(pg_movies$log_gross)
+shapiro.test(r_movies$log_gross)
+```
+Testovi ponovno ne potvrduju normalnost iako su se vrijednosti popravile. Probat cemo iz dataseta izbaciti strsece podatke.
+
+```{r}
+remove_outliers <- function(data, column) {
+  Q1 <- quantile(data[[column]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(data[[column]], 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  
+  data[data[[column]] >= lower_bound & data[[column]] <= upper_bound, ]
+}
+
+pg_movies_clean <- remove_outliers(pg_movies, "gross")
+
+r_movies_clean <- remove_outliers(r_movies, "gross")
+```
+
+```{r}
+pg_movies_clean$log_gross <- log(pg_movies_clean$gross + 1)
+r_movies_clean$log_gross <- log(r_movies_clean$gross + 1)
+
+qqnorm(pg_movies_clean$log_gross)
+qqline(pg_movies_clean$log_gross, col = "red")
+
+qqnorm(r_movies_clean$log_gross)
+qqline(r_movies_clean$log_gross, col = "red")
+
+hist(pg_movies_clean$log_gross, main = "Log Gross for PG Movies", breaks = 20)
+hist(r_movies_clean$log_gross, main = "Log Gross for R Movies", breaks = 20)
+```
+
+```{r}
+shapiro.test(pg_movies$log_gross)
+shapiro.test(r_movies$log_gross)
+```
+Log_gross bolje izgleda kad ne izbacujemo strsece vrijednosti, a i za pretpostaviti je da strsece vrijednosti(koje predstavljaju filmove koji su premasili sva ocekivanja)
+imaju velik utjecaj na nase pitanje stoga ih necemo izbacivati. Testove cemo napraviti nad podacima koji sadrze strsece vrijednosti. 
+
+Pod pretpostavkom normalnosti, napravit cemo test homogenosti varijance koristeci Bartlettov test.
+
+```{r}
+#zelimo raditi test homogenosti varijance samo nad PG i R rated filmovima
+data2 <- rbind(r_movies, pg_movies)
+pg_r_movies <- data2[data2$content_rating %in% c("PG", "R"), ]
+
+bartlett_result <- bartlett.test(log_gross ~ content_rating, data = pg_r_movies)
+bartlett_result
+```
+Rezultat Bartlettovog testa nam govori da mozemo odbaciti H0 u korist H1, odnosno grupe nemaju homogenu varijancu. 
+
+Svejedno cemo nastaviti s t-testom.
+
+```{r}
+t_test_result <- t.test(pg_movies$log_gross, r_movies$log_gross)
+t_test_result
+```
+Rezultati t-testa daju zakljuciti da mozemo odbaciti H0 u korist H1, odnosno postoji razlika izmedu zarada PG i R rated filmova. 
+
+Mozemo jos provjeriti i koja zarada je veca.
+
+```{r}
+t_test_result <- t.test(pg_movies$log_gross, r_movies$log_gross, alternative = "greater")
+t_test_result
+```
+PG rated filmovi imaju vecu zaradu od R rated filmova(interval povjerenja je pozitivan i neogranicen). 
+
+# Zadatak 2.
+
+## Postoji li razlika u budzetima filmova s obzirom na njihov zanr?
+
+```{r}
+
+```
+
+# Zadatak 3.
+
+## Mozemo li temeljem danih varijabli predvidjeti IMDB ocjenu nekog filma?
+
+```{r}
+movies <- na.omit(data) #mozda uzet samo stupce koje cu promatrat za lin. reg. jer inace izgubimo 1200 od 5000 redaka
+names(movies)
+#language, country, duration, genres, budget, gross ~ imdb_rating
+```
+
+# Zadatak 4.
+
+## Razlikuju li se IMDB ocjene filmova s obzirom na vrijeme premijere filma?
+
+```{r}
+
+```
+
